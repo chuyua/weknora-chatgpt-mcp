@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: weknora-chatgpt-mcp
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: WEKNORA_BASE_URL
+        value: https://weknora.weixin.qq.com/api/v1
+      - key: WEKNORA_API_KEY
+        sync: false
+      - key: MCP_ACCESS_TOKEN
+        sync: false
