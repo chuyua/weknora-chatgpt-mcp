@@ -15,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
+from oauth_helpers import build_protected_app
 
 
 DEFAULT_BASE_URL = "https://weknora.weixin.qq.com/api/v1"
@@ -286,4 +287,4 @@ _mcp_app = mcp.streamable_http_app(
     ),
 )
 
-app = StaticBearerAuth(_mcp_app)
+app = build_protected_app(_mcp_app)
