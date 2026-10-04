@@ -284,9 +284,6 @@ _mcp_app = mcp.streamable_http_app(
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=False,
     ),
-    custom_starlette_routes=[
-        Route("/healthz", endpoint=healthz, methods=["GET"]),
-    ],
 )
 
 app = StaticBearerAuth(_mcp_app)
