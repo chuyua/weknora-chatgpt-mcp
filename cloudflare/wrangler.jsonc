@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "weknora-mcp-chuyuai",
+  "pages_build_output_dir": "./pages-dist",
+  "compatibility_date": "2026-10-04",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "WEKNORA_BASE_URL": "https://weknora.weixin.qq.com/api/v1"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "db373269262b4741bc0e2234b5dbc0c3"
+    }
+  ]
+}
