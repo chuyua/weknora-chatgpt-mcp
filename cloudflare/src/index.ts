@@ -18,6 +18,7 @@ interface Env {
   OAUTH_PROVIDER: OAuthHelpers;
   WEKNORA_BASE_URL: string;
   WEKNORA_API_KEY: string;
+  WEKNORA_APP_ID: string;
 }
 
 interface AuthProps {
@@ -58,6 +59,45 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+async function buildGatewayHeaders(
+  env: Env,
+  requestBody: string,
+  encoding: "hex" | "base64" | "base64hex",
+): Promise<Record<string, string>> {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = crypto.randomUUID().replaceAll("-", "");
+  const requestId = crypto.randomUUID();
+  const message = `${timestamp}\n${nonce}\n${requestId}\n${requestBody}`;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.WEKNORA_API_KEY),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signatureBytes = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message)),
+  );
+  const hexSignature = Array.from(signatureBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const signature =
+    encoding === "hex"
+      ? hexSignature
+      : encoding === "base64"
+        ? btoa(String.fromCharCode(...signatureBytes))
+        : btoa(hexSignature);
+
+  return {
+    Accept: "application/json",
+    "X-APPID": env.WEKNORA_APP_ID,
+    "X-Request-ID": requestId,
+    "X-Timestamp": timestamp,
+    "X-Nonce": nonce,
+    "X-Signature": signature,
+  };
+}
+
 async function weknoraRequest(
   env: Env,
   method: "GET" | "POST",
@@ -65,17 +105,29 @@ async function weknoraRequest(
   body?: unknown,
 ): Promise<unknown> {
   const base = (env.WEKNORA_BASE_URL || "https://weknora.weixin.qq.com/api/v1").replace(/\/$/, "");
-  const response = await fetch(`${base}/${path.replace(/^\//, "")}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "X-API-Key": env.WEKNORA_API_KEY,
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const bodyText = body === undefined ? "" : JSON.stringify(body);
+  const encodings: Array<"hex" | "base64" | "base64hex"> = ["hex", "base64", "base64hex"];
+  let lastResponse: Response | null = null;
 
-  const raw = await response.text();
+  for (const encoding of encodings) {
+    const response = await fetch(`${base}/${path.replace(/^\//, "")}`, {
+      method,
+      headers: {
+        ...(await buildGatewayHeaders(env, bodyText, encoding)),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      body: body === undefined ? undefined : bodyText,
+    });
+    lastResponse = response;
+    if (response.status !== 401) break;
+    await response.text();
+  }
+
+  if (!lastResponse) {
+    throw new Error("WeKnora request failed before receiving a response");
+  }
+
+  const raw = await lastResponse.text();
   let parsed: unknown = raw;
   if (raw) {
     try {
@@ -85,8 +137,8 @@ async function weknoraRequest(
     }
   }
 
-  if (!response.ok) {
-    throw new Error(`WeKnora HTTP ${response.status}: ${JSON.stringify(parsed)}`);
+  if (!lastResponse.ok) {
+    throw new Error(`WeKnora HTTP ${lastResponse.status}: ${JSON.stringify(parsed)}`);
   }
   return parsed;
 }
