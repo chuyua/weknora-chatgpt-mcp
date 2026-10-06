@@ -108,6 +108,7 @@ async function weknoraRequest(
   const bodyText = body === undefined ? "" : JSON.stringify(body);
   const encodings: Array<"hex" | "base64" | "base64hex"> = ["hex", "base64", "base64hex"];
   let lastResponse: Response | null = null;
+  let raw = "";
 
   for (const encoding of encodings) {
     const response = await fetch(`${base}/${path.replace(/^\//, "")}`, {
@@ -119,15 +120,13 @@ async function weknoraRequest(
       body: body === undefined ? undefined : bodyText,
     });
     lastResponse = response;
+    raw = await response.text();
     if (response.status !== 401) break;
-    await response.text();
   }
 
   if (!lastResponse) {
     throw new Error("WeKnora request failed before receiving a response");
   }
-
-  const raw = await lastResponse.text();
   let parsed: unknown = raw;
   if (raw) {
     try {
