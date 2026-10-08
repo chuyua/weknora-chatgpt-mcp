@@ -1,0 +1,30 @@
+name: WeKnora Phase A security and read-only checks
+on:
+  pull_request:
+    paths:
+      - "cloudflare/**"
+      - ".github/workflows/weknora-phase-a.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: cloudflare/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: TypeScript and mocked MCP tests
+        run: npm run typecheck && npm run test
+      - name: Security audit (all dependencies)
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=high
+      - name: Cloudflare dry-run bundle (never deploy)
+        run: npm run build:pages
