@@ -1,20 +1,11 @@
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "weknora-chatgpt-mcp-cf",
-	"main": "src/index.ts",
-	"compatibility_date": "2026-10-04",
-	"compatibility_flags": [
-		"nodejs_compat",
-		"global_fetch_strictly_public"
-	],
-	"workers_dev": true,
-	"vars": {
-		"WEKNORA_BASE_URL": "https://weknora.weixin.qq.com/api/v1"
-	},
-	"kv_namespaces": [
-		{
-			"binding": "OAUTH_KV",
-			"id": "db373269262b4741bc0e2234b5dbc0c3"
-		}
-	]
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "weknora-chatgpt-mcp-cf",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-04",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "define": { "__MCP_ORIGIN__": "\"https://weknora-mcp-chuyuai.pages.dev\"" },
+  "vars": { "WEKNORA_BASE_URL": "https://weknora.weixin.qq.com/api/v1" },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "db373269262b4741bc0e2234b5dbc0c3" }]
 }
