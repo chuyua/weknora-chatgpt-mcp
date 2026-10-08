@@ -2,8 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ApiEnv } from "./knowledge-tools.ts";
 import { WriteLedger, payloadFingerprint, type WriteMeta } from "./write-ledger.ts";
+import { requirePersistedDraft } from "./manual-draft-guard.ts";
 
 export const WRITE_SCOPE = "mcp:write";
+// Phase B writes are a sandbox-only experiment. Lifting this limit requires
+// a separately reviewed production release, not an environment-variable flip.
+export const PHASE_B_SANDBOX_KB_ID = "54753f2f-701a-4123-aaa6-d921108b0706";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_KBS=20;
 export function permittedWriteKbs(env:ApiEnv):Set<string> {
@@ -12,13 +16,15 @@ export function permittedWriteKbs(env:ApiEnv):Set<string> {
   return new Set(values);
 }
 export function isWriteReady(env:ApiEnv):boolean {
+  const permitted=permittedWriteKbs(env);
   return env.MCP_WRITE_ENABLED==="true"
     && env.MCP_DRAFT_CONTRACT_VERIFIED==="true"
     && typeof env.OWNER_AUTH_SECRET==="string" && env.OWNER_AUTH_SECRET.length>=20
     && typeof env.WEKNORA_WRITE_API_KEY==="string" && env.WEKNORA_WRITE_API_KEY.length>15
     && env.WEKNORA_WRITE_API_KEY!==env.WEKNORA_API_KEY
     && !!env.WRITE_LEDGER
-    && permittedWriteKbs(env).size>0;
+    && permitted.size===1
+    && permitted.has(PHASE_B_SANDBOX_KB_ID);
 }
 type ApiCall=(env:ApiEnv,method:"GET"|"POST"|"PUT",path:string,body?:unknown)=>Promise<unknown>;
 function unwrap(v:unknown):unknown {
@@ -50,17 +56,7 @@ export function registerWriteTools(server:McpServer,env:ApiEnv,call:ApiCall):voi
       // been observed returning publish for draft requests. Verify by
       // reading the actual persisted record before reporting success.
       const persisted=unwrap(await call(env,"GET",`knowledge/${encodeURIComponent(id)}`));
-      if(!persisted||typeof persisted!=="object") throw new Error("Persisted knowledge cannot be verified");
-      const saved=persisted as Record<string,unknown>;
-      let metadata=saved.metadata;
-      if(typeof metadata==="string"){
-        try{metadata=JSON.parse(metadata);}catch{throw new Error("Persisted manual metadata invalid");}
-      }
-      if(saved.id!==id||saved.knowledge_base_id!==m.kbId||saved.type!=="manual"||
-        !metadata||typeof metadata!=="object"||!("status" in metadata)||
-        (metadata as {status:unknown}).status!=="draft") {
-        throw new Error("Upstream did not preserve draft status; manual reconciliation required");
-      }
+      requirePersistedDraft(persisted,id,m.kbId);
       await ledger.state(m,"success","upstream_confirmed",id);
       if(unlock) await ledger.releaseDocumentLock(m);
       return jsonResult({performed:true,operation_id:m.operationId,state:"success",knowledge_id:id});
@@ -122,14 +118,7 @@ export function registerWriteTools(server:McpServer,env:ApiEnv,call:ApiCall):voi
         latest=unwrap(await call(env,"GET",`knowledge/${encodeURIComponent(knowledge_id)}`)) as Record<string,unknown>;
         if(!latest||latest.knowledge_base_id!==kb_id||latest.type!=="manual")
           throw new Error("Knowledge record is not the requested manual entry in the authorized KB");
-        let rawMetadata=latest.metadata;
-        if(typeof rawMetadata==="string"){
-          try{rawMetadata=JSON.parse(rawMetadata);}
-          catch{throw new Error("Manual metadata could not be verified");}
-        }
-        const manualStatus=rawMetadata&&typeof rawMetadata==="object"&&"status" in rawMetadata
-          ? (rawMetadata as {status:unknown}).status : undefined;
-        if(manualStatus!=="draft") throw new Error("Only existing Markdown drafts may be modified");
+        requirePersistedDraft(latest,knowledge_id,kb_id);
         if(latest.updated_at!==expected_updated_at)
           throw new Error("Document changed since preview; review again before updating");
       }catch(error){

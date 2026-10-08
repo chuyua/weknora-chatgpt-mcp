@@ -6,8 +6,8 @@ import { createServer } from "../src/knowledge-tools.ts";
 import { isWriteReady } from "../src/write-tools.ts";
 import { createTestD1 } from "./support/sqlite-d1.mjs";
 
-const kb = "75dd92e0-7d69-4aec-acd7-133d16fac35e";
-const other = "2276692e-802c-468e-b9ed-840c7aff8c1c";
+const kb = "54753f2f-701a-4123-aaa6-d921108b0706";
+const other = "75dd92e0-7d69-4aec-acd7-133d16fac35e";
 const doc = "a9c354dc-166e-41a4-8d74-bd1da6b0040f";
 const updatedAt = "2026-10-07T18:00:00Z";
 const ledger = createTestD1();
@@ -57,7 +57,7 @@ test("write preview and execute require separate authorization, explicit confirm
  globalThis.fetch=async (url,init)=>{
   seen.push({url:String(url),method:init.method,key:init.headers["X-API-Key"],body:init.body});
   const data=init.method==="GET"
-    ? {id:doc,knowledge_base_id:kb,type:"manual",metadata:{status:"draft",format:"markdown"}}
+    ? {id:doc,knowledge_base_id:kb,type:"manual",enable_status:"disabled",parse_status:"draft",metadata:{status:"draft",format:"markdown"}}
     : {id:doc};
   return new Response(JSON.stringify({success:true,data}),{status:200,headers:{"Content-Type":"application/json"}});
  };
@@ -100,7 +100,7 @@ test("manual edit denies wrong type/KB/stale update and never writes on preview"
  let type="manual",timestamp=updatedAt,targetKb=kb,manualStatus="draft";
  globalThis.fetch=async (url,init)=>{
   seen.push({url:String(url),method:init.method,key:init.headers["X-API-Key"],body:init.body});
-  const response=init.method==="GET" ? {id:doc,knowledge_base_id:targetKb,type,updated_at:timestamp,metadata:{format:"markdown",status:manualStatus,version:1}} : {id:doc,updated_at:"new"};
+  const response=init.method==="GET" ? {id:doc,knowledge_base_id:targetKb,type,updated_at:timestamp,enable_status:"disabled",parse_status:"draft",metadata:{format:"markdown",status:manualStatus,version:1}} : {id:doc,updated_at:"new"};
   return new Response(JSON.stringify({success:true,data:response}),{status:200,headers:{"Content-Type":"application/json"}});
  };
  t.after(()=>globalThis.fetch=originalFetch);

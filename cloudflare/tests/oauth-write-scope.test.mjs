@@ -27,10 +27,12 @@ test("no optional write tools when production lacks dedicated ledger/credential"
    OWNER_AUTH_SECRET:"owner-auth-independent-long-string",
    WEKNORA_API_KEY:"readonly-staging-test-string",
    WEKNORA_WRITE_API_KEY:"different-write-staging-test-string",
-   WRITE_ALLOWED_KB_IDS:"75dd92e0-7d69-4aec-acd7-133d16fac35e"
+   WRITE_ALLOWED_KB_IDS:"54753f2f-701a-4123-aaa6-d921108b0706"
  };
  assert.equal(isWriteReady(config),false);
  assert.equal(isWriteReady({...config,WRITE_LEDGER:{}}),true);
+ assert.equal(isWriteReady({...config,WRITE_LEDGER:{},WRITE_ALLOWED_KB_IDS:"75dd92e0-7d69-4aec-acd7-133d16fac35e"}),false);
+ assert.equal(isWriteReady({...config,WRITE_LEDGER:{},WRITE_ALLOWED_KB_IDS:config.WRITE_ALLOWED_KB_IDS+",75dd92e0-7d69-4aec-acd7-133d16fac35e"}),false);
  assert.equal(isWriteReady({...config,WRITE_LEDGER:{},MCP_DRAFT_CONTRACT_VERIFIED:"false"}),false);
  assert.equal(isWriteReady({...config,WRITE_LEDGER:{},WEKNORA_WRITE_API_KEY:config.WEKNORA_API_KEY}),false);
 });

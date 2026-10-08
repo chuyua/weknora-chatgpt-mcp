@@ -5,7 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../src/knowledge-tools.ts";
 import { createTestD1 } from "./support/sqlite-d1.mjs";
 
-const kb="75dd92e0-7d69-4aec-acd7-133d16fac35e";
+const kb="54753f2f-701a-4123-aaa6-d921108b0706";
 const doc="a9c354dc-166e-41a4-8d74-bd1da6b0040f";
 const ids=[
   "8b6c1f58-f203-4e55-91da-99d47118af10",
@@ -63,7 +63,7 @@ test("ambiguous update retains document lock, disallows alternate content update
   const db=createTestD1();t.after(db.close);
   let sent=0;const orig=globalThis.fetch;
   globalThis.fetch=async(_url,init)=>{
-    if(init.method==="GET")return response({id:doc,type:"manual",knowledge_base_id:kb,updated_at:updated,metadata:{status:"draft",format:"markdown",version:1}});
+    if(init.method==="GET")return response({id:doc,type:"manual",knowledge_base_id:kb,updated_at:updated,enable_status:"disabled",parse_status:"draft",metadata:{status:"draft",format:"markdown",version:1}});
     if(init.method==="PUT"){sent++;throw new Error("Simulated uncertain write outcome");}
     throw new Error("Unexpected method");
   };
