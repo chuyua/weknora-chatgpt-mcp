@@ -1,8 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildFolderTree } from "./folder-tree.ts";
+import { registerWriteTools, isWriteReady } from "./write-tools.ts";
 
-export interface ApiEnv { WEKNORA_BASE_URL: string; WEKNORA_API_KEY: string; }
+export interface ApiEnv {
+  WEKNORA_BASE_URL: string;
+  WEKNORA_API_KEY: string;
+  WEKNORA_WRITE_API_KEY?: string;
+  OWNER_AUTH_SECRET?: string;
+  MCP_WRITE_ENABLED?: string;
+  MCP_DRAFT_CONTRACT_VERIFIED?: string;
+  WRITE_ALLOWED_KB_IDS?: string;
+  WRITE_LEDGER?: D1Database;
+}
 
 function jsonText(value: unknown) {
   return {
@@ -17,7 +27,7 @@ function jsonText(value: unknown) {
 
 export async function weknoraRequest(
   env: ApiEnv,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PUT",
   path: string,
   body?: unknown,
 ): Promise<unknown> {
@@ -86,7 +96,7 @@ function unwrapData(value: unknown): unknown {
   return value;
 }
 
-export function createServer(env: ApiEnv): McpServer {
+export function createServer(env: ApiEnv, options: {canWrite?:boolean} = {}): McpServer {
   const server = new McpServer({
     name: "WeKnora Cloud MCP",
     version: "1.0.0",
@@ -278,6 +288,7 @@ export function createServer(env: ApiEnv): McpServer {
     },
   );
 
+  if (options.canWrite === true && isWriteReady(env)) registerWriteTools(server,env,weknoraRequest);
   return server;
 }
 

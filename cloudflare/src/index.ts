@@ -8,6 +8,8 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { createServer } from "./knowledge-tools.js";
 import { failureKey, authIsBlocked, recordAuthFailure, clearAuthFailures } from "./oauth-guards.js";
+import { isWriteReady, WRITE_SCOPE } from "./write-tools.ts";
+import { decideScopes } from "./oauth-scope-policy.ts";
 
 // Compiled per deployment: staging and production have distinct OAuth issuers.
 declare const __MCP_ORIGIN__: string;
@@ -21,11 +23,17 @@ interface Env {
   WEKNORA_BASE_URL: string;
   WEKNORA_API_KEY: string;
   OWNER_AUTH_SECRET: string;
+  WEKNORA_WRITE_API_KEY?: string;
+  MCP_WRITE_ENABLED?: string;
+  MCP_DRAFT_CONTRACT_VERIFIED?: string;
+  WRITE_ALLOWED_KB_IDS?: string;
+  WRITE_LEDGER?: D1Database;
 }
 
 interface AuthProps {
   userId: string;
   role: "owner";
+  grantedScopes?: string[];
 }
 
 async function secureEqual(left: string, right: string): Promise<boolean> {
@@ -58,7 +66,8 @@ class McpApiHandler extends WorkerEntrypoint<Env, AuthProps> {
     if (new URL(request.url).pathname !== "/mcp") {
       return new Response("Not found", { status: 404 });
     }
-    const server = createServer(this.env);
+    const canWrite = isWriteReady(this.env) && this.ctx.props.grantedScopes?.includes(WRITE_SCOPE) === true;
+    const server = createServer(this.env, {canWrite});
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -111,6 +120,10 @@ const defaultHandler: ExportedHandler<Env> = {
       const loginInstructions = independentLogin
         ? "请输入单独配置的应用授权密码（不是 WeKnora API Key）。"
         : "请使用此前的 WeKnora API Key 授权；生产环境尚未迁移到独立授权密码。不要把密钥发送到聊天中。";
+      const showWriteApproval = isWriteReady(env) && oauthRequest.scope.includes(WRITE_SCOPE);
+      const writeApproval = showWriteApproval
+        ? '<label><input type="checkbox" name="write_consent" value="yes" required> 我明确允许为配置白名单中的知识库创建或修改 Markdown 草稿</label>'
+        : "";
       const html = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -132,7 +145,8 @@ const defaultHandler: ExportedHandler<Env> = {
   <p class="small">此页面只用于所有者授权；升级不改变已签发的有效访问令牌。</p>
   <form method="post" action="${escapeHtml(request.url)}">
     <input type="password" name="${loginField}" autocomplete="current-password" required>
-    <button type="submit">授权只读访问</button>
+    ${writeApproval}
+    <button type="submit">${showWriteApproval ? "确认授权访问" : "授权只读访问"}</button>
   </form>
 </div></body></html>`;
       return new Response(html, {
@@ -174,9 +188,12 @@ const defaultHandler: ExportedHandler<Env> = {
     }
     await clearAuthFailures(env.OAUTH_KV, key);
 
-    const allowed = new Set([READ_SCOPE, "offline_access"]);
-    const grantedScopes = oauthRequest.scope.filter((scope) => allowed.has(scope));
-    if (!grantedScopes.includes(READ_SCOPE)) grantedScopes.push(READ_SCOPE);
+    const writeApproved = isWriteReady(env) && oauthRequest.scope.includes(WRITE_SCOPE)
+      && form.get("write_consent") === "yes";
+    const grantedScopes = decideScopes(oauthRequest.scope, {
+      writeReady: isWriteReady(env),
+      writeConsent: writeApproved,
+    });
 
     const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
       request: oauthRequest,
@@ -188,6 +205,7 @@ const defaultHandler: ExportedHandler<Env> = {
       props: {
         userId: "weknora-owner",
         role: "owner",
+        grantedScopes,
       },
     });
 
@@ -201,7 +219,7 @@ export default new OAuthProvider<Env>({
   defaultHandler,
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/oauth/token",
-  scopesSupported: [READ_SCOPE, "offline_access"],
+  scopesSupported: [READ_SCOPE, WRITE_SCOPE, "offline_access"],
   requiredScopes: [READ_SCOPE],
   resourceMetadata: {
     resource: MCP_RESOURCE,

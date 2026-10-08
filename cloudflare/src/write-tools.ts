@@ -1,0 +1,155 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import type { ApiEnv } from "./knowledge-tools.ts";
+import { WriteLedger, payloadFingerprint, type WriteMeta } from "./write-ledger.ts";
+
+export const WRITE_SCOPE = "mcp:write";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_KBS=20;
+export function permittedWriteKbs(env:ApiEnv):Set<string> {
+  const values=(env.WRITE_ALLOWED_KB_IDS??"").split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
+  if(!values.length||values.length>MAX_KBS||values.some(x=>!UUID.test(x))) return new Set();
+  return new Set(values);
+}
+export function isWriteReady(env:ApiEnv):boolean {
+  return env.MCP_WRITE_ENABLED==="true"
+    && env.MCP_DRAFT_CONTRACT_VERIFIED==="true"
+    && typeof env.OWNER_AUTH_SECRET==="string" && env.OWNER_AUTH_SECRET.length>=20
+    && typeof env.WEKNORA_WRITE_API_KEY==="string" && env.WEKNORA_WRITE_API_KEY.length>15
+    && env.WEKNORA_WRITE_API_KEY!==env.WEKNORA_API_KEY
+    && !!env.WRITE_LEDGER
+    && permittedWriteKbs(env).size>0;
+}
+type ApiCall=(env:ApiEnv,method:"GET"|"POST"|"PUT",path:string,body?:unknown)=>Promise<unknown>;
+function unwrap(v:unknown):unknown {
+  return v&&typeof v==="object"&&"data" in v ? (v as {data:unknown}).data:v;
+}
+function jsonResult(value:unknown){
+  return {content:[{type:"text" as const,text:JSON.stringify(value)}]};
+}
+function knowledgeId(v:unknown):string|undefined {
+  if(v&&typeof v==="object"&&"id" in v && typeof v.id==="string"&&UUID.test(v.id)) return v.id;
+}
+export function registerWriteTools(server:McpServer,env:ApiEnv,call:ApiCall):void {
+  if(!isWriteReady(env)) return;
+  const allowed=permittedWriteKbs(env);
+  const ledger=new WriteLedger(env.WRITE_LEDGER!);
+  const writeEnv={...env,WEKNORA_API_KEY:env.WEKNORA_WRITE_API_KEY!};
+  const requireAllowed=(kb:string)=>{
+    if(!allowed.has(kb.toLowerCase())) throw new Error("Knowledge base is not authorized for writes");
+  };
+  const finalize=async(m:WriteMeta,action:()=>Promise<unknown>,unlock:boolean)=>{
+    let dispatched=false;
+    try{
+      await ledger.state(m,"sent","upstream_dispatch");
+      dispatched=true;
+      const result=unwrap(await action());
+      const id=knowledgeId(result);
+      if(!id) throw new Error("Upstream response has no valid knowledge ID");
+      // Do not trust request status=draft alone. The managed cloud has
+      // been observed returning publish for draft requests. Verify by
+      // reading the actual persisted record before reporting success.
+      const persisted=unwrap(await call(env,"GET",`knowledge/${encodeURIComponent(id)}`));
+      if(!persisted||typeof persisted!=="object") throw new Error("Persisted knowledge cannot be verified");
+      const saved=persisted as Record<string,unknown>;
+      let metadata=saved.metadata;
+      if(typeof metadata==="string"){
+        try{metadata=JSON.parse(metadata);}catch{throw new Error("Persisted manual metadata invalid");}
+      }
+      if(saved.id!==id||saved.knowledge_base_id!==m.kbId||saved.type!=="manual"||
+        !metadata||typeof metadata!=="object"||!("status" in metadata)||
+        (metadata as {status:unknown}).status!=="draft") {
+        throw new Error("Upstream did not preserve draft status; manual reconciliation required");
+      }
+      await ledger.state(m,"success","upstream_confirmed",id);
+      if(unlock) await ledger.releaseDocumentLock(m);
+      return jsonResult({performed:true,operation_id:m.operationId,state:"success",knowledge_id:id});
+    }catch(error){
+      if(dispatched){
+        // Network or response error might follow a committed upstream write:
+        // never retry automatically and retain document lock for reconciliation.
+        try{await ledger.state(m,"uncertain","manual_reconciliation_required");}catch{}
+      }else{
+        try{await ledger.state(m,"rejected","not_dispatched");}catch{}
+        if(unlock) await ledger.releaseDocumentLock(m);
+      }
+      throw new Error("Write could not be confirmed. Do not retry with a new operation ID; inspect the audit record");
+    }
+  };
+  server.tool("create_manual_knowledge",
+    "Create a draft Markdown record. Preview by default. For execute pass a stable operation_id UUID and confirm=true; no automatic retry.",
+    {
+      kb_id:z.string().uuid(),
+      title:z.string().trim().min(1).max(200),
+      content:z.string().trim().min(1).max(100000),
+      mode:z.enum(["preview","execute"]).default("preview"),
+      confirm:z.boolean().default(false),
+      operation_id:z.string().uuid().optional(),
+    },
+    async({kb_id,title,content,mode,confirm,operation_id})=>{
+      requireAllowed(kb_id);
+      if(mode==="preview") return jsonResult({operation:"create",kb_id,title,content_length:content.length,status:"draft",performed:false,requires_confirmation:true});
+      if(!confirm||!operation_id) throw new Error("Explicit confirmation and operation_id required");
+      const m:WriteMeta={operationId:operation_id,action:"create",kbId:kb_id,
+        fingerprint:await payloadFingerprint("create",kb_id,undefined,title,content)};
+      await ledger.reserve(m);
+      return finalize(m,()=>call(writeEnv,"POST",`knowledge-bases/${encodeURIComponent(kb_id)}/knowledge/manual`,{title,content,status:"draft"}),false);
+    });
+  server.tool("update_manual_knowledge",
+    "Edit an existing manual Markdown draft with a timestamp check and durable document lock. Does not protect concurrent updates outside this MCP.",
+    {
+      kb_id:z.string().uuid(),knowledge_id:z.string().uuid(),
+      title:z.string().trim().min(1).max(200),
+      content:z.string().trim().min(1).max(100000),
+      expected_updated_at:z.string().min(10).max(80),
+      mode:z.enum(["preview","execute"]).default("preview"),
+      confirm:z.boolean().default(false),
+      operation_id:z.string().uuid().optional(),
+    },
+    async({kb_id,knowledge_id,title,content,expected_updated_at,mode,confirm,operation_id})=>{
+      requireAllowed(kb_id);
+      if(mode==="execute"&&(!confirm||!operation_id)) throw new Error("Explicit confirmation and operation_id required");
+      const m:WriteMeta={
+        operationId:operation_id||crypto.randomUUID(),action:"update",kbId:kb_id,knowledgeId:knowledge_id,
+        fingerprint:await payloadFingerprint("update",kb_id,knowledge_id,title,content,expected_updated_at),
+      };
+      if(mode==="execute"){
+        await ledger.reserve(m);
+        await ledger.acquireDocumentLock(m);
+      }
+      let latest:Record<string,unknown>;
+      try{
+        latest=unwrap(await call(env,"GET",`knowledge/${encodeURIComponent(knowledge_id)}`)) as Record<string,unknown>;
+        if(!latest||latest.knowledge_base_id!==kb_id||latest.type!=="manual")
+          throw new Error("Knowledge record is not the requested manual entry in the authorized KB");
+        let rawMetadata=latest.metadata;
+        if(typeof rawMetadata==="string"){
+          try{rawMetadata=JSON.parse(rawMetadata);}
+          catch{throw new Error("Manual metadata could not be verified");}
+        }
+        const manualStatus=rawMetadata&&typeof rawMetadata==="object"&&"status" in rawMetadata
+          ? (rawMetadata as {status:unknown}).status : undefined;
+        if(manualStatus!=="draft") throw new Error("Only existing Markdown drafts may be modified");
+        if(latest.updated_at!==expected_updated_at)
+          throw new Error("Document changed since preview; review again before updating");
+      }catch(error){
+        if(mode==="execute"){
+          await ledger.state(m,"rejected","preflight_failed");
+          await ledger.releaseDocumentLock(m);
+        }
+        throw error;
+      }
+      if(mode==="preview") return jsonResult({
+        operation:"update",kb_id,knowledge_id,title,content_length:content.length,
+        performed:false,requires_confirmation:true,expected_updated_at,
+      });
+      return finalize(m,()=>call(writeEnv,"PUT",`knowledge/manual/${encodeURIComponent(knowledge_id)}`,{title,content,status:"draft"}),true);
+    });
+  server.tool("get_write_operation",
+    "Read one operation state for incident investigation; no knowledge content or credentials.",
+    {operation_id:z.string().uuid()},
+    async({operation_id})=>jsonResult({
+      operation:await ledger.read(operation_id),
+      audit_events:await ledger.events(operation_id),
+    }));
+}

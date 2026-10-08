@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "weknora-mcp-chuyuai-staging",
+  "pages_build_output_dir": "./pages-dist",
+  "compatibility_date": "2026-10-04",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "WEKNORA_BASE_URL": "https://weknora.weixin.qq.com/api/v1",
+    "WRITE_ALLOWED_KB_IDS": "54753f2f-701a-4123-aaa6-d921108b0706",
+    "MCP_WRITE_ENABLED": "false"
+  },
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "10886753845d4a639c71afa64961f3d8" }],
+  "d1_databases": [{
+    "binding": "WRITE_LEDGER",
+    "database_name": "weknora-phaseb-staging-write-ledger",
+    "database_id": "d5115d37-424b-4dce-ade1-0a80b70efb31"
+  }]
+}
