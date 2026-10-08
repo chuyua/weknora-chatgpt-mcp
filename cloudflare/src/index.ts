@@ -5,11 +5,13 @@ import {
   type OAuthHelpers,
 } from "@cloudflare/workers-oauth-provider";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { createMcpHandler } from "agents/mcp";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { createServer } from "./knowledge-tools.js";
+import { failureKey, authIsBlocked, recordAuthFailure, clearAuthFailures } from "./oauth-guards.js";
 
-const MCP_ORIGIN = "https://weknora-mcp-chuyuai.pages.dev";
+// Compiled per deployment: staging and production have distinct OAuth issuers.
+declare const __MCP_ORIGIN__: string;
+const MCP_ORIGIN = __MCP_ORIGIN__;
 const MCP_RESOURCE = `${MCP_ORIGIN}/mcp`;
 const READ_SCOPE = "mcp:read";
 
@@ -18,22 +20,12 @@ interface Env {
   OAUTH_PROVIDER: OAuthHelpers;
   WEKNORA_BASE_URL: string;
   WEKNORA_API_KEY: string;
+  OWNER_AUTH_SECRET: string;
 }
 
 interface AuthProps {
   userId: string;
   role: "owner";
-}
-
-function jsonText(value: unknown) {
-  return {
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(value, null, 2),
-      },
-    ],
-  };
 }
 
 async function secureEqual(left: string, right: string): Promise<boolean> {
@@ -58,148 +50,21 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-async function weknoraRequest(
-  env: Env,
-  method: "GET" | "POST",
-  path: string,
-  body?: unknown,
-): Promise<unknown> {
-  const base = (env.WEKNORA_BASE_URL || "https://weknora.weixin.qq.com/api/v1").replace(/\/$/, "");
-  const bodyText = body === undefined ? undefined : JSON.stringify(body);
-  const response = await fetch(`${base}/${path.replace(/^\//, "")}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      "X-API-Key": env.WEKNORA_API_KEY,
-      "X-Request-ID": crypto.randomUUID(),
-      ...(bodyText === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    body: bodyText,
-  });
-
-  const raw = await response.text();
-  let parsed: unknown = raw;
-  if (raw) {
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      parsed = { message: raw.slice(0, 1000) };
-    }
-  }
-
-  if (!response.ok) {
-    throw new Error(`WeKnora HTTP ${response.status}: ${JSON.stringify(parsed)}`);
-  }
-  return parsed;
-}
-
-function unwrapData(value: unknown): unknown {
-  if (value && typeof value === "object" && "data" in value) {
-    return (value as { data: unknown }).data;
-  }
-  return value;
-}
-
-function createServer(env: Env): McpServer {
-  const server = new McpServer({
-    name: "WeKnora Cloud MCP",
-    version: "1.0.0",
-  });
-
-  server.tool(
-    "weknora_status",
-    "Check cloud connectivity to WeKnora without exposing credentials.",
-    {},
-    async () => {
-      const result: Record<string, unknown> = {
-        base_url: env.WEKNORA_BASE_URL,
-        api_key_configured: Boolean(env.WEKNORA_API_KEY),
-        reachable: false,
-      };
-      try {
-        const payload = unwrapData(await weknoraRequest(env, "GET", "knowledge-bases"));
-        const list = Array.isArray(payload)
-          ? payload
-          : payload && typeof payload === "object" && "items" in payload
-            ? (payload as { items: unknown }).items
-            : payload && typeof payload === "object" && "list" in payload
-              ? (payload as { list: unknown }).list
-              : undefined;
-        result.reachable = true;
-        result.knowledge_base_count = Array.isArray(list) ? list.length : null;
-      } catch (error) {
-        result.error = error instanceof Error ? error.message : String(error);
-      }
-      return jsonText(result);
-    },
-  );
-
-  server.tool(
-    "list_knowledge_bases",
-    "List WeKnora knowledge bases visible to the configured cloud credential.",
-    {},
-    async () => {
-      const payload = unwrapData(await weknoraRequest(env, "GET", "knowledge-bases"));
-      return jsonText({ knowledge_bases: payload });
-    },
-  );
-
-  server.tool(
-    "search_knowledge",
-    "Search WeKnora knowledge. Optionally restrict the search to knowledge-base IDs.",
-    {
-      query: z.string().min(1),
-      knowledge_base_ids: z.array(z.string()).optional(),
-      limit: z.number().int().min(1).max(30).default(10),
-    },
-    async ({ query, knowledge_base_ids, limit }) => {
-      const body: Record<string, unknown> = {
-        query,
-        match_count: limit,
-      };
-      if (knowledge_base_ids?.length) body.knowledge_base_ids = knowledge_base_ids;
-      const payload = unwrapData(
-        await weknoraRequest(
-          env,
-          "POST",
-          "knowledge-search?resource_urls=public",
-          body,
-        ),
-      );
-      return jsonText({ query, results: payload });
-    },
-  );
-
-  server.tool(
-    "get_knowledge",
-    "Read one WeKnora knowledge item by ID.",
-    { knowledge_id: z.string().min(1) },
-    async ({ knowledge_id }) => {
-      const encoded = encodeURIComponent(knowledge_id);
-      const payload = unwrapData(
-        await weknoraRequest(
-          env,
-          "GET",
-          `knowledge/${encoded}?resource_urls=public`,
-        ),
-      );
-      return jsonText(payload);
-    },
-  );
-
-  return server;
-}
-
 class McpApiHandler extends WorkerEntrypoint<Env, AuthProps> {
   async fetch(request: Request): Promise<Response> {
     if (this.ctx.props.role !== "owner") {
       return new Response("Forbidden", { status: 403 });
     }
+    if (new URL(request.url).pathname !== "/mcp") {
+      return new Response("Not found", { status: 404 });
+    }
     const server = createServer(this.env);
-    return createMcpHandler(server, {
-      route: "/mcp",
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
       enableJsonResponse: true,
-    })(request, this.env, this.ctx as unknown as ExecutionContext);
+    });
+    await server.connect(transport);
+    return transport.handleRequest(request);
   }
 }
 
@@ -220,15 +85,9 @@ const defaultHandler: ExportedHandler<Env> = {
     const url = new URL(request.url);
 
     if (url.pathname === "/healthz") {
-      try {
-        await weknoraRequest(env, "GET", "knowledge-bases");
-        return Response.json({ ok: true, service: "weknora-cloudflare-mcp", upstream: true });
-      } catch {
-        return Response.json(
-          { ok: false, service: "weknora-cloudflare-mcp", upstream: false },
-          { status: 502 },
-        );
-      }
+      // Anonymous liveness must not reveal upstream credential or tenant state.
+      return Response.json({ ok: true, service: "weknora-cloudflare-mcp" },
+        { headers: { "Cache-Control": "no-store" } });
     }
 
     if (url.pathname !== "/authorize") {
@@ -264,10 +123,10 @@ const defaultHandler: ExportedHandler<Env> = {
 <body><div class="card">
   <h2>连接 WeKnora 云知识库</h2>
   <p>客户端：${escapeHtml(client.clientName ?? "ChatGPT")}</p>
-  <p>请输入当前有效的 WeKnora API Key 完成本人授权。</p>
-  <p class="small">Key 仅在此 Cloudflare Worker 内与 Secret 做哈希等时比较，不会返回给 ChatGPT，也不会写入 OAuth Token、日志或 GitHub。</p>
+  <p>请输入此应用单独设置的授权密码。不要输入 WeKnora API Key。</p>
+  <p class="small">应用授权密码与 WeKnora API Key 分开保管；密码只用于验证所有者身份。</p>
   <form method="post" action="${escapeHtml(request.url)}">
-    <input type="password" name="api_key" autocomplete="current-password" required>
+    <input type="password" name="owner_secret" autocomplete="current-password" required>
     <button type="submit">授权只读访问</button>
   </form>
 </div></body></html>`;
@@ -275,6 +134,9 @@ const defaultHandler: ExportedHandler<Env> = {
         headers: {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
+          "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
         },
       });
     }
@@ -283,14 +145,23 @@ const defaultHandler: ExportedHandler<Env> = {
       return new Response("Method not allowed", { status: 405 });
     }
 
+    const key = await failureKey(request);
+    if (await authIsBlocked(env.OAUTH_KV, key)) {
+      return new Response("Too many authentication failures", {
+        status: 429, headers: { "Retry-After": "900", "Cache-Control": "no-store" },
+      });
+    }
     const form = await request.formData();
-    const supplied = form.get("api_key");
-    if (typeof supplied !== "string" || !env.WEKNORA_API_KEY) {
+    const supplied = form.get("owner_secret");
+    if (typeof supplied !== "string" || !env.OWNER_AUTH_SECRET) {
+      await recordAuthFailure(env.OAUTH_KV, key);
       return new Response("Authorization failed", { status: 401 });
     }
-    if (!(await secureEqual(supplied, env.WEKNORA_API_KEY))) {
-      return new Response("WeKnora API Key 不正确。", { status: 401 });
+    if (!(await secureEqual(supplied, env.OWNER_AUTH_SECRET))) {
+      await recordAuthFailure(env.OAUTH_KV, key);
+      return new Response("授权密码不正确。", { status: 401 });
     }
+    await clearAuthFailures(env.OAUTH_KV, key);
 
     const allowed = new Set([READ_SCOPE, "offline_access"]);
     const grantedScopes = oauthRequest.scope.filter((scope) => allowed.has(scope));
