@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { buildFolderTree } from "./folder-tree.ts";
 
 export interface ApiEnv { WEKNORA_BASE_URL: string; WEKNORA_API_KEY: string; }
 
@@ -211,11 +212,59 @@ export function createServer(env: ApiEnv): McpServer {
 
   server.tool(
     "list_knowledge_folders",
-    "Read the folder tree of a knowledge base.",
+    "Read a knowledge-base folder tree. On managed cloud versions without the native endpoint, reconstruct it from paginated folder_path metadata.",
     { kb_id: z.string().uuid() },
     async ({ kb_id }) => {
-      const payload = unwrapData(await weknoraRequest(env, "GET", `knowledge-bases/${encodeURIComponent(kb_id)}/knowledge/folders`));
-      return jsonText({ kb_id, folders: payload });
+      const prefix = `knowledge-bases/${encodeURIComponent(kb_id)}/knowledge`;
+      try {
+        const payload = unwrapData(await weknoraRequest(env, "GET", `${prefix}/folders`));
+        return jsonText({ kb_id, folders: payload, source: "native" });
+      } catch (error) {
+        // A hosted cloud release may predate /knowledge/folders. Never
+        // fall back on 401, 403 or other upstream errors.
+        if (!(error instanceof Error) || error.message !== "WeKnora upstream HTTP 404") throw error;
+      }
+      const PAGE_SIZE = 100;
+      const MAX_PAGES = 40;
+      const PATH_FIELD = "folder_path";
+      const paths: string[] = [];
+      let scanned = 0;
+      let complete = false;
+      for (let page = 1; page <= MAX_PAGES; page += 4) {
+        const pages = await Promise.all(
+          Array.from({ length: Math.min(4, MAX_PAGES - page + 1) }, (_, i) => page + i).map(async (number) => {
+            const params = new URLSearchParams({ page: String(number), page_size: String(PAGE_SIZE) });
+            const response = await weknoraRequest(env, "GET", `${prefix}?${params}`);
+            const data = unwrapData(response);
+            const entries = Array.isArray(data)
+              ? data
+              : data && typeof data === "object" && "items" in data
+                ? (data as { items: unknown }).items
+                : undefined;
+            if (!Array.isArray(entries)) throw new Error("Unexpected WeKnora knowledge list response");
+            return entries;
+          }),
+        );
+        for (const entries of pages) {
+          scanned += entries.length;
+          for (const item of entries) {
+            if (item && typeof item === "object" && PATH_FIELD in item) {
+              const path = (item as Record<string, unknown>)[PATH_FIELD];
+              if (typeof path === "string") paths.push(path);
+            }
+          }
+          if (entries.length < PAGE_SIZE) { complete = true; break; }
+        }
+        if (complete) break;
+      }
+      if (!complete) throw new Error("Folder list exceeds bounded scan; refusing incomplete tree");
+      return jsonText({
+        kb_id,
+        folders: buildFolderTree(paths),
+        source: "derived_from_knowledge",
+        scanned_knowledge: scanned,
+        complete: true,
+      });
     },
   );
 
