@@ -11,6 +11,7 @@ const ids=[
   "8b6c1f58-f203-4e55-91da-99d47118af10",
   "8b6c1f58-f203-4e55-91da-99d47118af11",
   "8b6c1f58-f203-4e55-91da-99d47118af12",
+  "8b6c1f58-f203-4e55-91da-99d47118af13",
 ];
 const updated="2026-10-07T18:00:00Z";
 function getEnv(ledger) {return {
@@ -103,7 +104,35 @@ test("published state after a requested draft is never reported as success",asyn
     assert.equal(readCount,1);
     const logged=parsed(await client.callTool({name:"get_write_operation",arguments:{operation_id:ids[2]}}));
     assert.equal(logged.operation.state,"uncertain");
+    assert.equal(logged.operation.result_id,doc,"Persist upstream ID for manual reconciliation");
+    assert.ok(logged.audit_events.some(event=>event.event==="sent"&&event.code==="upstream_result_identified"));
+    assert.ok(logged.audit_events.some(event=>event.event==="uncertain"&&event.code==="draft_contract_violation"));
     assert.equal((await client.callTool({name:"create_manual_knowledge",arguments:args})).isError,true);
     assert.equal(postCount,1);
+  });
+});
+
+test("readback outage retains the acknowledged upstream ID and prevents blind retry",async(t)=>{
+  const db=createTestD1();t.after(db.close);
+  let writes=0,readbacks=0;
+  const original=globalThis.fetch;
+  globalThis.fetch=async(_url,init)=>{
+    if(init.method==="POST"){writes++;return response({id:doc});}
+    if(init.method==="GET"){readbacks++;throw new Error("Readback service unavailable");}
+    throw new Error("Unexpected method");
+  };
+  t.after(()=>globalThis.fetch=original);
+  await connect(getEnv(db),async(client)=>{
+    const args={kb_id:kb,title:"sandbox-readback-test",content:"test-only",mode:"execute",confirm:true,operation_id:ids[3]};
+    const failed=await client.callTool({name:"create_manual_knowledge",arguments:args});
+    assert.equal(failed.isError,true);
+    const audit=parsed(await client.callTool({name:"get_write_operation",arguments:{operation_id:ids[3]}}));
+    assert.equal(audit.operation.state,"uncertain");
+    assert.equal(audit.operation.result_id,doc);
+    assert.ok(audit.audit_events.some(x=>x.code==="upstream_result_identified"));
+    assert.ok(audit.audit_events.some(x=>x.code==="manual_reconciliation_required"));
+    assert.equal((await client.callTool({name:"create_manual_knowledge",arguments:args})).isError,true);
+    assert.equal(writes,1);
+    assert.equal(readbacks,1);
   });
 });

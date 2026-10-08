@@ -46,17 +46,26 @@ export function registerWriteTools(server:McpServer,env:ApiEnv,call:ApiCall):voi
   };
   const finalize=async(m:WriteMeta,action:()=>Promise<unknown>,unlock:boolean)=>{
     let dispatched=false;
+    let draftContractViolation=false;
     try{
       await ledger.state(m,"sent","upstream_dispatch");
       dispatched=true;
       const result=unwrap(await action());
       const id=knowledgeId(result);
       if(!id) throw new Error("Upstream response has no valid knowledge ID");
+      // Persist the upstream ID BEFORE verifying the stored state, so an
+      // unexpectedly published record can be located during reconciliation.
+      await ledger.state(m,"sent","upstream_result_identified",id);
       // Do not trust request status=draft alone. The managed cloud has
       // been observed returning publish for draft requests. Verify by
       // reading the actual persisted record before reporting success.
       const persisted=unwrap(await call(env,"GET",`knowledge/${encodeURIComponent(id)}`));
-      requirePersistedDraft(persisted,id,m.kbId);
+      try {
+        requirePersistedDraft(persisted,id,m.kbId);
+      } catch {
+        draftContractViolation=true;
+        throw new Error("Persisted draft safety invariant failed");
+      }
       await ledger.state(m,"success","upstream_confirmed",id);
       if(unlock) await ledger.releaseDocumentLock(m);
       return jsonResult({performed:true,operation_id:m.operationId,state:"success",knowledge_id:id});
@@ -64,7 +73,7 @@ export function registerWriteTools(server:McpServer,env:ApiEnv,call:ApiCall):voi
       if(dispatched){
         // Network or response error might follow a committed upstream write:
         // never retry automatically and retain document lock for reconciliation.
-        try{await ledger.state(m,"uncertain","manual_reconciliation_required");}catch{}
+        try{await ledger.state(m,"uncertain",draftContractViolation ? "draft_contract_violation" : "manual_reconciliation_required");}catch{}
       }else{
         try{await ledger.state(m,"rejected","not_dispatched");}catch{}
         if(unlock) await ledger.releaseDocumentLock(m);
