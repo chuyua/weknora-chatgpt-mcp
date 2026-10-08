@@ -22,6 +22,11 @@ test('authorization scope is read-only',()=> {
  assert.match(src,/const READ_SCOPE = "mcp:read"/);
  assert.doesNotMatch(src,/mcp:write|mcp:admin/);
 });
+test('OAuth success redirects are allowed by CSP for ChatGPT callbacks',()=>{
+ assert.match(src,/form-action 'self' https:\/\/chatgpt\.com https:\/\/chat\.openai\.com/);
+ assert.match(src,/frame-ancestors 'none'/);
+ assert.match(src,/redirectUri/);
+});
 test('credential is not emitted in MCP status',()=> {
  const status=src.slice(src.indexOf('"weknora_status"'),src.indexOf('"list_knowledge_bases"'));
  assert.doesNotMatch(status,/api_key:\s*env\.WEKNORA_API_KEY/);

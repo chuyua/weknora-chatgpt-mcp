@@ -139,7 +139,9 @@ const defaultHandler: ExportedHandler<Env> = {
         headers: {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
-          "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+          // Chromium checks form-action against redirects too. OAuth success
+          // returns 302 to the validated ChatGPT redirect URI: permit it.
+          "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com https://chat.openai.com; frame-ancestors 'none'; base-uri 'none'",
           "referrer-policy": "no-referrer",
           "x-content-type-options": "nosniff",
         },
