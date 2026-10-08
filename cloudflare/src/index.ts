@@ -106,6 +106,11 @@ const defaultHandler: ExportedHandler<Env> = {
     if (!client) return new Response("Unknown OAuth client", { status: 400 });
 
     if (request.method === "GET") {
+      const independentLogin = Boolean(env.OWNER_AUTH_SECRET);
+      const loginField = independentLogin ? "owner_secret" : "api_key";
+      const loginInstructions = independentLogin
+        ? "请输入单独配置的应用授权密码（不是 WeKnora API Key）。"
+        : "请使用此前的 WeKnora API Key 授权；生产环境尚未迁移到独立授权密码。不要把密钥发送到聊天中。";
       const html = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -123,10 +128,10 @@ const defaultHandler: ExportedHandler<Env> = {
 <body><div class="card">
   <h2>连接 WeKnora 云知识库</h2>
   <p>客户端：${escapeHtml(client.clientName ?? "ChatGPT")}</p>
-  <p>请输入此应用单独设置的授权密码。不要输入 WeKnora API Key。</p>
-  <p class="small">应用授权密码与 WeKnora API Key 分开保管；密码只用于验证所有者身份。</p>
+  <p>${escapeHtml(loginInstructions)}</p>
+  <p class="small">此页面只用于所有者授权；升级不改变已签发的有效访问令牌。</p>
   <form method="post" action="${escapeHtml(request.url)}">
-    <input type="password" name="owner_secret" autocomplete="current-password" required>
+    <input type="password" name="${loginField}" autocomplete="current-password" required>
     <button type="submit">授权只读访问</button>
   </form>
 </div></body></html>`;
@@ -152,12 +157,16 @@ const defaultHandler: ExportedHandler<Env> = {
       });
     }
     const form = await request.formData();
-    const supplied = form.get("owner_secret");
-    if (typeof supplied !== "string" || !env.OWNER_AUTH_SECRET) {
+    // Preserve previous production authorization until OWNER_AUTH_SECRET is set.
+    // Staging does not inherit any secret from production.
+    const independentLogin = Boolean(env.OWNER_AUTH_SECRET);
+    const expectedSecret = independentLogin ? env.OWNER_AUTH_SECRET : env.WEKNORA_API_KEY;
+    const supplied = form.get(independentLogin ? "owner_secret" : "api_key");
+    if (typeof supplied !== "string" || !expectedSecret) {
       await recordAuthFailure(env.OAUTH_KV, key);
       return new Response("Authorization failed", { status: 401 });
     }
-    if (!(await secureEqual(supplied, env.OWNER_AUTH_SECRET))) {
+    if (!(await secureEqual(supplied, expectedSecret))) {
       await recordAuthFailure(env.OAUTH_KV, key);
       return new Response("授权密码不正确。", { status: 401 });
     }
