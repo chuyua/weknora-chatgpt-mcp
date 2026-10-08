@@ -64,7 +64,7 @@ test("write preview and execute require separate authorization, explicit confirm
  t.after(()=>globalThis.fetch=originalFetch);
  await withMcp(configured,true,async c=>{
   const names=await toolNames(c);
-  assert.equal(names.length,12);
+  assert.equal(names.length,13);
   assert.ok(names.includes("create_manual_knowledge"));
   const args={kb_id:kb,title:"测试草稿",content:"## Markdown"};
   const preview=resultJson(await c.callTool({name:"create_manual_knowledge",arguments:args}));

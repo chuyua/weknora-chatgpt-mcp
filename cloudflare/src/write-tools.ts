@@ -150,4 +150,44 @@ export function registerWriteTools(server:McpServer,env:ApiEnv,call:ApiCall):voi
       operation:await ledger.read(operation_id),
       audit_events:await ledger.events(operation_id),
     }));
+  server.tool("inspect_write_reconciliation",
+    "Read-only investigation of one prior sandbox write. Uses its recorded upstream ID; reveals state metadata only, never content or credentials. Does not retry, republish, or unlock anything.",
+    {operation_id:z.string().uuid()},
+    async({operation_id})=>{
+      const operation=await ledger.read(operation_id);
+      if(!operation) return jsonResult({found:false,operation_id});
+      if(operation.kb_id.toLowerCase()!==PHASE_B_SANDBOX_KB_ID)
+        throw new Error("Only Phase B sandbox write records may be inspected");
+      const audit_events=await ledger.events(operation_id);
+      const lock_owner=operation.knowledge_id ? await ledger.lockOwner(operation.knowledge_id) : null;
+      if(!operation.result_id){
+        return jsonResult({
+          found:true,operation_id,state:operation.state,
+          remote_check:"no_upstream_id",requires_manual_reconciliation:true,
+          lock_held:lock_owner===operation_id,audit_events,
+        });
+      }
+      let remote:Record<string,unknown>;
+      try{
+        remote=unwrap(await call(env,"GET",`knowledge/${encodeURIComponent(operation.result_id)}`)) as Record<string,unknown>;
+      }catch{
+        return jsonResult({
+          found:true,operation_id,upstream_knowledge_id:operation.result_id,
+          state:operation.state,remote_check:"readback_unavailable",
+          requires_manual_reconciliation:true,
+          lock_held:lock_owner===operation_id,audit_events,
+        });
+      }
+      let draft_verified=false;
+      try{requirePersistedDraft(remote,operation.result_id,PHASE_B_SANDBOX_KB_ID);draft_verified=true;}catch{}
+      // Never include metadata.content, title, bearer credentials or response bodies.
+      return jsonResult({
+        found:true,operation_id,upstream_knowledge_id:operation.result_id,
+        state:operation.state,remote_check:draft_verified?"unpublished_draft_confirmed":"draft_contract_not_verified",
+        remote_parse_status:typeof remote?.parse_status==="string"?remote.parse_status:null,
+        remote_enable_status:typeof remote?.enable_status==="string"?remote.enable_status:null,
+        requires_manual_reconciliation:operation.state!=="success"||!draft_verified,
+        lock_held:lock_owner===operation_id,audit_events,
+      });
+    });
 }

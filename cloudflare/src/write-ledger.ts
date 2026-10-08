@@ -71,6 +71,11 @@ export class WriteLedger {
     return this.db.prepare("SELECT operation_id,action,kb_id,knowledge_id,state,result_id,created_at,updated_at FROM weknora_write_ops WHERE operation_id=?")
       .bind(operationId).first<WriteRecord>();
   }
+  async lockOwner(knowledgeId:string):Promise<string|null> {
+    const lock=await this.db.prepare("SELECT operation_id FROM weknora_write_locks WHERE knowledge_id=?")
+      .bind(knowledgeId).first<{operation_id:string}>();
+    return lock?.operation_id??null;
+  }
   async events(operationId:string):Promise<unknown[]> {
     const records=await this.db.prepare(
       "SELECT seq,event,code,created_at FROM weknora_write_audit WHERE operation_id=? ORDER BY seq LIMIT 100")

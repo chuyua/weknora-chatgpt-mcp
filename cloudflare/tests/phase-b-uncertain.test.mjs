@@ -49,6 +49,9 @@ test("ambiguous create timeout becomes uncertain, blocks same-ID and same-conten
     assert.equal(first.isError,true);
     let state=parsed(await client.callTool({name:"get_write_operation",arguments:{operation_id:ids[0]}}));
     assert.equal(state.operation.state,"uncertain");
+    const inspection=parsed(await client.callTool({name:"inspect_write_reconciliation",arguments:{operation_id:ids[0]}}));
+    assert.equal(inspection.remote_check,"no_upstream_id");
+    assert.equal(inspection.requires_manual_reconciliation,true);
     assert.ok(state.audit_events.some(x=>x.event==="uncertain"));
     assert.equal(dispatched,1);
     assert.equal((await client.callTool({name:"create_manual_knowledge",arguments:{...base,operation_id:ids[0]}})).isError,true);
@@ -105,6 +108,10 @@ test("published state after a requested draft is never reported as success",asyn
     const logged=parsed(await client.callTool({name:"get_write_operation",arguments:{operation_id:ids[2]}}));
     assert.equal(logged.operation.state,"uncertain");
     assert.equal(logged.operation.result_id,doc,"Persist upstream ID for manual reconciliation");
+    const inspected=parsed(await client.callTool({name:"inspect_write_reconciliation",arguments:{operation_id:ids[2]}}));
+    assert.equal(inspected.remote_check,"draft_contract_not_verified");
+    assert.equal(inspected.requires_manual_reconciliation,true);
+    assert.ok(!JSON.stringify(inspected).includes("sandbox example"));
     assert.ok(logged.audit_events.some(event=>event.event==="sent"&&event.code==="upstream_result_identified"));
     assert.ok(logged.audit_events.some(event=>event.event==="uncertain"&&event.code==="draft_contract_violation"));
     assert.equal((await client.callTool({name:"create_manual_knowledge",arguments:args})).isError,true);
