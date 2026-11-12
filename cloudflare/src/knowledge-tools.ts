@@ -96,10 +96,11 @@ function unwrapData(value: unknown): unknown {
   return value;
 }
 
-export function createServer(env: ApiEnv, options: {canWrite?:boolean} = {}): McpServer {
+export function createServer(env: ApiEnv, options: {canWrite?:boolean; icons?: {src:string; mimeType:string; sizes:string[]}[]} = {}): McpServer {
   const server = new McpServer({
     name: "WeKnora Cloud MCP",
     version: "1.0.0",
+    icons: options.icons,
   });
 
   server.tool(

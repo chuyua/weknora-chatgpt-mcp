@@ -16,12 +16,14 @@ test("live MCP tool handshake and mocked official WeKnora API", async (t) => {
   };
   t.after(() => { globalThis.fetch = originalFetch; });
   const env = { WEKNORA_BASE_URL: "https://mock.weknora.invalid/api/v1", WEKNORA_API_KEY: "test-secret-do-not-output" };
-  const server = createServer(env);
+  const icons = [{src: "https://weknora.example/icon.png", mimeType: "image/png", sizes: ["256x256"]}];
+  const server = createServer(env, {icons});
   const client = new Client({ name: "phasea-test", version: "1.0.0" }, { capabilities: {} });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
+  assert.deepEqual(client.getServerVersion().icons, icons, "MCP initialize advertises the public icon");
   const tools = await client.listTools();
   assert.deepEqual(tools.tools.map(x=>x.name).sort(),[
     "get_chunk_by_id","get_knowledge","get_knowledge_base","list_chunks","list_knowledge","list_knowledge_bases","list_knowledge_folders","search_knowledge","weknora_status"

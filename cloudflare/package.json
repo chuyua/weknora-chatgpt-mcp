@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
-    "verify:phase-a": "npm run typecheck && npm run test && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run build:pages",
+    "verify:phase-a": "npm run typecheck && npm run test && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run build:pages && node scripts/verify-oauth-runtime.mjs",
     "build:pages": "wrangler deploy --dry-run -c wrangler.worker.jsonc --outdir pages-bundle && node scripts/copy-pages-bundle.mjs",
     "deploy:pages": "npm run typecheck && npm run build:pages && wrangler pages deploy --branch main",
     "deploy:worker-backup": "wrangler deploy -c wrangler.worker.jsonc"
@@ -15,12 +15,12 @@
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.3",
     "@modelcontextprotocol/sdk": "1.32.1",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261008.1",
+    "@cloudflare/workers-types": "5.20261110.1",
     "typescript": "7.0.2",
-    "wrangler": "4.148.0"
+    "wrangler": "4.160.0"
   },
   "overrides": {
     "sharp": "0.35.5"
