@@ -4,4 +4,5 @@ node_modules/
 .env
 dist/
 pages-bundle/
-pages-dist/_worker.js
+pages-dist/*
+!pages-dist/index.html

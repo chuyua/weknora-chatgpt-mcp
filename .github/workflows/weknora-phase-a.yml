@@ -28,3 +28,5 @@ jobs:
         run: npm audit --registry=https://registry.npmjs.org --audit-level=high
       - name: Cloudflare dry-run bundle (never deploy)
         run: npm run build:pages
+      - name: OAuth runtime verification on both published hosts
+        run: node scripts/verify-oauth-runtime.mjs
